@@ -26,6 +26,20 @@ impl MapEntry {
             flags,
         }
     }
+
+    pub fn get_source (&self) -> Result<Arc<dyn DataSource>, &str> {
+        if self.flags.read {
+            return Ok(self.source.clone());
+        }
+        Err("This mapping is not readable")
+    }
+
+    pub fn get_offset (&self) -> Result<usize, &str> {
+        if self.flags.read {
+            return Ok(self.offset);
+        }
+        Err("This mapping is not readable")
+    }
 }
 
 /// An address space.
@@ -99,7 +113,40 @@ impl AddressSpace {
         start: VirtualAddress,
         flags: FlagBuilder
     ) -> Result<(), &str> {
-        todo!()
+        let mut next_mapping: Option<&MapEntry> = None;
+        // finds the "next mapping" that our Virtual Address has to worry about brushing up against
+        for mapping in &self.mappings {
+            if start < mapping.addr {
+                next_mapping = Some(mapping);
+                break;
+            }
+            //checks if desired start address is already inside another mapping
+            if start < mapping.addr + mapping.span + PAGE_SIZE {
+                return Err("Start address inside an existing mapping!");
+            }
+        }
+        // if this mapping would be the last one, check against VADDR_MAX
+        if next_mapping.is_none() {
+            if start + span + 2 * PAGE_SIZE < VADDR_MAX {
+                let mapping_addr = start + PAGE_SIZE;
+                let new_mapping = MapEntry::new(source, offset, span, mapping_addr, flags);
+                self.mappings.push(new_mapping);
+                self.mappings.sort_by(|a, b| a.addr.cmp(&b.addr));
+                return Ok(());
+            } else {
+                return Err("not enough space in this address!")
+            }
+        }
+        
+        // otherwise, check against the start of next_mapping
+        if start + span + 2 * PAGE_SIZE < next_mapping.unwrap().addr {
+            let mapping_addr = start + PAGE_SIZE;
+            let new_mapping = MapEntry::new(source, offset, span, mapping_addr, flags);
+            self.mappings.push(new_mapping);
+            self.mappings.sort_by(|a, b| a.addr.cmp(&b.addr));
+            return Ok(());
+        }
+        Err("not enough space in this address!")
     }
 
     /// Remove the mapping to `DataSource` that starts at the given address.
@@ -107,11 +154,24 @@ impl AddressSpace {
     /// # Errors
     /// If the mapping could not be removed.
     pub fn remove_mapping<D: DataSource>(
-        &self,
+        &mut self,
         source: Arc<D>,
         start: VirtualAddress,
     ) -> Result<(), &str> {
-        todo!()
+        let mut deletion_index = 0;
+        for mapping in &self.mappings {
+            if start < mapping.addr {
+                return Err("There is no mapping that starts at this address.");
+            } else if start < mapping.addr + mapping.span {
+                break;
+            }
+            deletion_index += 1;
+        }
+        //if source != self.get_source_for_addr(addr, access_type).unwrap().0 {
+        //    return Err("Mapping at this address is to another Data Source");
+        //}
+        self.mappings.remove(deletion_index);
+        Ok(())
     }
 
     /// Look up the DataSource and offset within that DataSource for a
@@ -124,13 +184,29 @@ impl AddressSpace {
         &self,
         addr: VirtualAddress,
         access_type: FlagBuilder,
-    ) -> Result<(Arc<D>, usize), &str> {
-        todo!();
+    ) -> Result<(Arc<dyn DataSource>, usize), &str> {
+        let result_mapping = self.get_mapping_for_addr(addr);
+        match result_mapping {
+            Ok(mapping) => {
+                let mapping_source = mapping.get_source();
+                let mapping_offset = mapping.get_offset();
+                if mapping_source.is_err() { return Err("Mapping is not Readable.");}
+                return Ok((mapping_source.unwrap(), mapping_offset.unwrap()))
+            },
+            Err(_) => {return Err("No mapping found");},
+        }
     }
 
     /// Helper function for looking up mappings
-    fn get_mapping_for_addr(&self, addr: VirtualAddress) -> Result<MapEntry, &str> {
-        todo!();
+    fn get_mapping_for_addr(&self, addr: VirtualAddress) -> Result<&MapEntry, &str> {
+        for mapping in &self.mappings {
+            if addr < mapping.addr {
+                return Err("No mapping starts here");
+            } else if addr < mapping.addr + mapping.span {
+                return Ok(mapping);
+            }
+        }
+        Err("No mapping starts here!")
     }
 }
 
